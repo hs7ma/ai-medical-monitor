@@ -1,0 +1,105 @@
+services:
+  mosquitto:
+    image: eclipse-mosquitto:2
+    container_name: med_mosquitto
+    restart: unless-stopped
+    ports:
+      - "1883:1883"
+      - "9001:9001"
+    volumes:
+      - ./mosquitto/config:/mosquitto/config
+      - ./mosquitto/data:/mosquitto/data
+      - ./mosquitto/log:/mosquitto/log
+    networks:
+      - mednet
+
+  influxdb:
+    image: influxdb:2.7
+    container_name: med_influxdb
+    restart: unless-stopped
+    ports:
+      - "8086:8086"
+    environment:
+      DOCKER_INFLUXDB_INIT_MODE: setup
+      DOCKER_INFLUXDB_INIT_USERNAME: ${INFLUXDB_USER:-medadmin}
+      DOCKER_INFLUXDB_INIT_PASSWORD: ${INFLUXDB_PASSWORD:-medpassword}
+      DOCKER_INFLUXDB_INIT_ORG: ${INFLUXDB_ORG:-hospital}
+      DOCKER_INFLUXDB_INIT_BUCKET: ${INFLUXDB_BUCKET:-vitals}
+      DOCKER_INFLUXDB_INIT_ADMIN_TOKEN: ${INFLUXDB_TOKEN:-medtoken}
+    volumes:
+      - influxdb_data:/var/lib/influxdb2
+    networks:
+      - mednet
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: med_postgres
+    restart: unless-stopped
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-medapp}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-medpassword}
+      POSTGRES_DB: ${POSTGRES_DB:-medical_monitor}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - mednet
+
+  minio:
+    image: minio/minio:latest
+    container_name: med_minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-medadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-medsecret123}
+    volumes:
+      - minio_data:/data
+    networks:
+      - mednet
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: med_backend
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    depends_on:
+      - mosquitto
+      - influxdb
+      - postgres
+      - minio
+    networks:
+      - mednet
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: med_frontend
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      NEXT_PUBLIC_API_URL: http://backend:8000
+    depends_on:
+      - backend
+    networks:
+      - mednet
+
+networks:
+  mednet:
+    driver: bridge
+
+volumes:
+  influxdb_data:
+  postgres_data:
+  minio_data:
