@@ -143,7 +143,7 @@ export default function PatientDetailPage() {
               )}
             </>
           ) : (
-            <p className="py-6 text-center text-xs text-text-muted">No vital signs recorded yet. Click "Add Reading" to input sensor data.</p>
+            <p className="py-6 text-center text-xs text-text-muted">No vital signs recorded yet. Click &quot;Add Reading&quot; to input sensor data.</p>
           )}
         </div>
       </Card>
