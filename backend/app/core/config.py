@@ -54,13 +54,13 @@ class Settings(BaseSettings):
 
     @property
     def database_dsn(self) -> str:
-        if self.USE_SQLITE:
-            return "sqlite:///./medical_monitor.db"
         if self.DATABASE_URL:
             url = self.DATABASE_URL
             if url.startswith("postgresql://"):
                 url = url.replace("postgresql://", "postgresql+psycopg2://", 1)
             return url
+        if self.USE_SQLITE:
+            return "sqlite:///./medical_monitor.db"
         return self.postgres_dsn
 
     class Config:
