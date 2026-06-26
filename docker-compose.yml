@@ -1,15 +1,16 @@
 services:
   mosquitto:
-    image: eclipse-mosquitto:2
+    build:
+      context: ./mosquitto
+      dockerfile: Dockerfile
     container_name: med_mosquitto
     restart: unless-stopped
     ports:
       - "1883:1883"
       - "9001:9001"
     volumes:
-      - ./mosquitto/config:/mosquitto/config
-      - ./mosquitto/data:/mosquitto/data
-      - ./mosquitto/log:/mosquitto/log
+      - mosquitto_data:/mosquitto/data
+      - mosquitto_log:/mosquitto/log
     networks:
       - mednet
 
@@ -103,3 +104,5 @@ volumes:
   influxdb_data:
   postgres_data:
   minio_data:
+  mosquitto_data:
+  mosquitto_log:
