@@ -12,12 +12,16 @@ import { Input, Label, Select } from "@/components/ui/Input";
 import { FileUploader } from "@/components/uploads/FileUploader";
 import { getVitalStatus, statusColor } from "@/lib/vitals";
 import { clsx } from "clsx";
+import { useToast } from "@/components/ui/Toast";
+import { useModal } from "@/components/ui/Modal";
 
 const fileTypeIcons: Record<string, string> = { pdf: "PDF", image: "IMG" };
 const emptyVitals = { spo2: "", heart_rate: "", temperature: "", source: "manual" };
 
 export default function PatientDetailPage() {
   const { t } = useI18n();
+  const { showToast } = useToast();
+  const { showAlert, showConfirm } = useModal();
   const params = useParams();
   const patientId = Number(params.id);
   const [patient, setPatient] = useState<any>(null);
@@ -46,8 +50,8 @@ export default function PatientDetailPage() {
 
   useEffect(() => { loadAll(); }, [loadAll]);
 
-  const handleDelete = async (fileId: number) => { if (!confirm(t("uploads.deleteConfirm"))) return; try { await api.deleteFile(fileId); loadAll(); } catch (err: any) { alert(err.message); } };
-  const handleExtract = async (fileId: number) => { setExtracting(fileId); try { const res = await api.extractText(fileId); alert(res.extracted_text || "(empty)"); } catch (err: any) { alert(err.message); } finally { setExtracting(null); } };
+  const handleDelete = async (fileId: number) => { const ok = await showConfirm({ title: t("uploads.deleteConfirm"), message: t("uploads.deleteConfirm") }); if (!ok) return; try { await api.deleteFile(fileId); loadAll(); } catch (err: any) { showToast({ type: "error", message: err.message }); } };
+  const handleExtract = async (fileId: number) => { setExtracting(fileId); try { const res = await api.extractText(fileId); await showAlert({ type: "info", title: "Extracted Text", message: res.extracted_text || "(empty)" }); } catch (err: any) { showToast({ type: "error", message: err.message }); } finally { setExtracting(null); } };
 
   const handleVitalsSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -62,7 +66,7 @@ export default function PatientDetailPage() {
       setVitalsForm(emptyVitals);
       setShowVitalsForm(false);
       loadAll();
-    } catch (err: any) { alert(err?.message || "Failed to submit vitals"); } finally { setSubmittingVitals(false); }
+    } catch (err: any) { showToast({ type: "error", message: err?.message || "Failed to submit vitals" }); } finally { setSubmittingVitals(false); }
   };
 
   if (loading) return <div className="py-8 text-center text-sm text-text-muted">Loading...</div>;

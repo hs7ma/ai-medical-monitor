@@ -7,9 +7,11 @@ import { Card } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
 import { Input, Label, Select } from "@/components/ui/Input";
 import { clsx } from "clsx";
+import { useToast } from "@/components/ui/Toast";
 
 export default function AdminPage() {
   const { t } = useI18n();
+  const { showToast } = useToast();
   const [users, setUsers] = useState<any[]>([]);
   const [showForm, setShowForm] = useState(false);
   const [newUser, setNewUser] = useState({ username: "", password: "", role: "nurse", full_name: "" });
@@ -19,7 +21,7 @@ export default function AdminPage() {
 
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
-    try { await api.createUser(newUser); setNewUser({ username: "", password: "", role: "nurse", full_name: "" }); setShowForm(false); load(); } catch (err: any) { alert(err.message); }
+    try { await api.createUser(newUser); setNewUser({ username: "", password: "", role: "nurse", full_name: "" }); setShowForm(false); load(); } catch (err: any) { showToast({ type: "error", message: err.message }); }
   };
 
   const roleColor: Record<string, string> = { admin: "bg-purple-50 text-purple-600", doctor: "bg-accent-light text-accent", nurse: "bg-success-light text-success" };

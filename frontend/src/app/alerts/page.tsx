@@ -7,9 +7,11 @@ import { formatTime, formatDate } from "@/lib/vitals";
 import { Card } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
 import { clsx } from "clsx";
+import { useToast } from "@/components/ui/Toast";
 
 export default function AlertsPage() {
   const { t } = useI18n();
+  const { showToast } = useToast();
   const [alerts, setAlerts] = useState<any[]>([]);
   const [filter, setFilter] = useState("active");
   const [loading, setLoading] = useState(true);
@@ -17,7 +19,7 @@ export default function AlertsPage() {
   const load = useCallback(async () => { try { setAlerts(await api.listAlerts(filter)); } catch {} finally { setLoading(false); } }, [filter]);
   useEffect(() => { setLoading(true); load(); }, [load]);
 
-  const handleAck = async (id: number) => { try { await api.ackAlert(id); load(); } catch (err: any) { alert(err.message); } };
+  const handleAck = async (id: number) => { try { await api.ackAlert(id); load(); } catch (err: any) { showToast({ type: "error", message: err.message }); } };
 
   const filters = [{ value: "active", label: t("alerts.active") }, { value: "acked", label: t("alerts.acked") }, { value: "all", label: t("alerts.all") }];
   const sevColor: Record<string, string> = { critical: "bg-danger-light text-danger", warning: "bg-warning-light text-warning", info: "bg-accent-light text-accent" };

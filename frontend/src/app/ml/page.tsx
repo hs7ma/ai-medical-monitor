@@ -24,7 +24,7 @@ const defaults = {
 };
 
 export default function MLPredictionPage() {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const [features, setFeatures] = useState<any>(defaults);
   const [result, setResult] = useState<any>(null);
   const [loading, setLoading] = useState(false);
@@ -45,6 +45,8 @@ export default function MLPredictionPage() {
       const res = await api.predictHeart(features);
       if (res.available === false) {
         setError(res.detail || "Model not available");
+      } else if (res.can_predict === false) {
+        setError(locale === "ar" ? res.message_ar : res.message_en);
       } else {
         setResult(res);
       }
@@ -260,8 +262,8 @@ export default function MLPredictionPage() {
                 />
 
                 <div className="text-center sm:text-right space-y-1">
-                  <p className="text-[10px] font-bold uppercase tracking-wider text-text-muted">الاستنتاج</p>
-                  <p className="text-base font-bold text-text">{result.prediction_label}</p>
+                  <p className="text-[10px] font-bold uppercase tracking-wider text-text-muted">{locale === "ar" ? "الاستنتاج" : "Conclusion"}</p>
+                  <p className="text-base font-bold text-text">{locale === "ar" ? (result.prediction_label || result.prediction_label_en) : (result.prediction_label_en || result.prediction_label)}</p>
                   <div className="mt-2.5">
                     <span
                       className={`inline-flex items-center gap-1.5 rounded-lg border px-3 py-1 text-xs font-bold uppercase tracking-wider ${
@@ -270,7 +272,7 @@ export default function MLPredictionPage() {
                         riskColors[result.risk_level]?.border
                       }`}
                     >
-                      مستوى الخطر: {result.risk_level === "high" ? "مرتفع" : result.risk_level === "moderate" ? "متوسط" : result.risk_level === "low" ? "منخفض" : "طبيعي"}
+                      {locale === "ar" ? "مستوى الخطر: " : "Risk Level: "}{locale === "ar" ? (result.risk_level_ar || result.risk_level) : (result.risk_level || result.risk_level_ar)}
                     </span>
                   </div>
                 </div>
@@ -279,7 +281,7 @@ export default function MLPredictionPage() {
               {/* Top Contributing Features */}
               <div className="space-y-3 pt-4 border-t border-slate-100">
                 <p className="text-[10px] font-bold uppercase tracking-wider text-text-muted">
-                  أهم العوامل الحيوية المساهمة في الاحتمالية
+                  {locale === "ar" ? "أهم العوامل الحيوية المساهمة في الاحتمالية" : "Top Contributing Factors"}
                 </p>
                 <div className="space-y-3">
                   {result.top_features?.map((tf: any, i: number) => {
@@ -287,7 +289,7 @@ export default function MLPredictionPage() {
                     return (
                       <div key={i} className="space-y-1">
                         <div className="flex items-center justify-between text-xs">
-                          <span className="font-semibold text-text-secondary">{tf.feature}</span>
+                          <span className="font-semibold text-text-secondary">{locale === "ar" ? (tf.feature || tf.feature_en) : (tf.feature_en || tf.feature)}</span>
                           <span className="font-bold text-accent">{pct.toFixed(1)}%</span>
                         </div>
                         <div className="h-2 w-full rounded-full bg-slate-100 overflow-hidden">
@@ -304,9 +306,9 @@ export default function MLPredictionPage() {
 
               {/* Model Specifications */}
               <div className="rounded-xl bg-slate-50 border border-slate-100 px-4 py-3 text-[11px] text-text-muted flex flex-wrap gap-x-4 gap-y-1 justify-between items-center">
-                <span>النموذج: {result.model_name}</span>
-                <span>حجم التدريب: {result.training_size?.toLocaleString()} سجل</span>
-                <span className="font-semibold text-text-secondary">الدقة: {(result.model_accuracy * 100).toFixed(1)}% | AUC: {(result.model_auc * 100).toFixed(1)}%</span>
+                <span>{locale === "ar" ? "النموذج: " : "Model: "}{result.model_name}</span>
+                <span>{locale === "ar" ? "حجم التدريب: " : "Training size: "}{result.training_size?.toLocaleString()} {locale === "ar" ? "سجل" : "records"}</span>
+                <span className="font-semibold text-text-secondary">{locale === "ar" ? "الدقة: " : "Accuracy: "}{(result.model_accuracy * 100).toFixed(1)}% | AUC: {(result.model_auc * 100).toFixed(1)}%</span>
               </div>
             </div>
           </Card>

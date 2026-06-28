@@ -7,11 +7,13 @@ import { api } from "@/lib/api";
 import { Card } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
 import { Input, Label, Select } from "@/components/ui/Input";
+import { useToast } from "@/components/ui/Toast";
 
 const emptyForm = { name: "", age: "", gender: "male", phone: "", room: "", diagnosis: "", notes: "" };
 
 export default function PatientsPage() {
   const { t } = useI18n();
+  const { showToast } = useToast();
   const [patients, setPatients] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
@@ -39,7 +41,7 @@ export default function PatientsPage() {
       setShowForm(false);
       load();
       setTimeout(() => setCreatedId(null), 5000);
-    } catch (err: any) { alert(err?.message || "Failed to create patient"); }
+    } catch (err: any) { showToast({ type: "error", message: err?.message || "Failed to create patient" }); }
   };
 
   if (loading) return <div className="py-8 text-center text-sm text-text-muted">Loading...</div>;

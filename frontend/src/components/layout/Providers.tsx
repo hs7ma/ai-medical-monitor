@@ -5,6 +5,8 @@ import { useRouter } from "next/navigation";
 import { I18nProvider } from "@/i18n/context";
 import { useAuth } from "@/lib/auth";
 import { Navbar } from "@/components/layout/Navbar";
+import { ToastProvider } from "@/components/ui/Toast";
+import { ModalProvider } from "@/components/ui/Modal";
 
 function AppShell({ children }: { children: React.ReactNode }) {
   const router = useRouter();
@@ -36,7 +38,11 @@ function AppShell({ children }: { children: React.ReactNode }) {
 export function Providers({ children }: { children: React.ReactNode }) {
   return (
     <I18nProvider>
-      <AppShell>{children}</AppShell>
+      <ToastProvider>
+        <ModalProvider>
+          <AppShell>{children}</AppShell>
+        </ModalProvider>
+      </ToastProvider>
     </I18nProvider>
   );
 }

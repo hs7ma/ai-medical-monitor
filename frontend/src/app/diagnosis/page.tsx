@@ -8,6 +8,8 @@ import { Button } from "@/components/ui/Button";
 import { Input, Select, Label } from "@/components/ui/Input";
 import { FileUploader } from "@/components/uploads/FileUploader";
 import { DiagnosisCard } from "@/components/diagnosis/DiagnosisCard";
+import { useToast } from "@/components/ui/Toast";
+import { useModal } from "@/components/ui/Modal";
 
 interface Message {
   id: number;
@@ -162,24 +164,26 @@ const riskColors: Record<string, { ring: string; text: string; bg: string; borde
   },
 };
 
-const ML_DEFAULTS = {
-  age: 50,
-  sex: 1,
-  cp: 0,
-  trestbps: 120,
-  chol: 200,
-  fbs: 0,
-  restecg: 0,
-  thalach: 72,
-  exang: 0,
-  oldpeak: 0,
-  slope: 1,
-  ca: 0,
-  thal: 0,
+const ML_EMPTY: Record<string, number | ""> = {
+  age: "",
+  sex: "",
+  cp: "",
+  trestbps: "",
+  chol: "",
+  fbs: "",
+  restecg: "",
+  thalach: "",
+  exang: "",
+  oldpeak: "",
+  slope: "",
+  ca: "",
+  thal: "",
 };
 
 export default function DiagnosisPage() {
   const { t, locale } = useI18n();
+  const { showToast } = useToast();
+  const { showAlert } = useModal();
   const mlFields = [
     { key: "age", label: t("diagnosis.ageLabel"), type: "number" },
     {
@@ -264,11 +268,12 @@ export default function DiagnosisPage() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   // ML Form states
-  const [mlFeatures, setMlFeatures] = useState<any>(ML_DEFAULTS);
+  const [mlFeatures, setMlFeatures] = useState<any>(ML_EMPTY);
   const [mlResult, setMlResult] = useState<any>(null);
   const [mlLoading, setMlLoading] = useState(false);
   const [mlError, setMlError] = useState("");
   const [aiExtracting, setAiExtracting] = useState(false);
+  const [extractReport, setExtractReport] = useState<any>(null);
   const [liveNotification, setLiveNotification] = useState("");
 
   // Intake Form states
@@ -315,10 +320,10 @@ export default function DiagnosisPage() {
       } catch {}
       
       setMlFeatures({
-        ...ML_DEFAULTS,
-        age: p.age || 50,
+        ...ML_EMPTY,
+        age: p.age || "",
         sex: isMale,
-        thalach: latestHr,
+        thalach: latestHr !== 72 ? latestHr : "",
       });
       setMlResult(null);
       setMlError("");
@@ -352,6 +357,9 @@ export default function DiagnosisPage() {
       
       // Update clinical indicators from Q&A dynamically
       if (res.extracted_indicators && Object.keys(res.extracted_indicators).length > 0) {
+        const newKeys = Object.keys(res.extracted_indicators).filter(
+          (k) => res.extracted_indicators[k] !== null && res.extracted_indicators[k] !== undefined
+        );
         setMlFeatures((prev: any) => {
           const updated = { ...prev };
           Object.entries(res.extracted_indicators).forEach(([k, v]) => {
@@ -359,11 +367,12 @@ export default function DiagnosisPage() {
               updated[k] = v;
             }
           });
-          handleLiveMLPredict(updated);
+          handleLiveMLPredict(updated, newKeys);
           return updated;
         });
 
         const listStr = Object.entries(res.extracted_indicators)
+          .filter(([, v]) => v !== null && v !== undefined)
           .map(([k, v]) => `${mlFields.find((f) => f.key === k)?.label || k}: ${v}`)
           .join("، ");
         setLiveNotification(locale === "ar"
@@ -443,7 +452,7 @@ ${mlContext}
 
       await sendMessageToAI(s.id, initialMsg, fileIds);
     } catch (err: any) {
-      alert(err?.message || "Failed to start session");
+      showToast({ type: "error", title: "خطأ", message: err?.message || "Failed to start session" });
     } finally {
       setLoading(false);
     }
@@ -483,6 +492,8 @@ ${mlContext}
       const res = await api.predictHeart(mlFeatures);
       if (res.available === false) {
         setMlError(res.detail || "Model not available");
+      } else if (res.can_predict === false) {
+        setMlError(locale === "ar" ? res.message_ar : res.message_en);
       } else {
         setMlResult(res);
       }
@@ -493,11 +504,20 @@ ${mlContext}
     }
   };
 
-  const handleLiveMLPredict = async (features: any) => {
+  const handleLiveMLPredict = async (features: any, extractedKeys?: string[]) => {
     try {
-      const res = await api.predictHeart(features);
+      const res = await api.predictHeart({
+        ...features,
+        extracted_keys: extractedKeys || Object.keys(features),
+      });
       if (res && res.available !== false) {
-        setMlResult(res);
+        if (res.can_predict === false) {
+          setMlError(locale === "ar" ? res.message_ar : res.message_en);
+          setMlResult(null);
+        } else {
+          setMlResult(res);
+          setMlError("");
+        }
       }
     } catch {}
   };
@@ -505,34 +525,45 @@ ${mlContext}
   const handleAIExtractIndicators = async () => {
     if (!selectedPatient || selectedFileIds.length === 0) return;
     setAiExtracting(true);
+    setExtractReport(null);
     try {
-      const extracted = await api.extractFileIndicators(selectedPatient.id, selectedFileIds);
-      if (extracted && Object.keys(extracted).length > 0) {
-        // Merge the extracted values into mlFeatures
+      const report = await api.extractFileIndicators(selectedPatient.id, selectedFileIds);
+      const indicators = report?.indicators || {};
+      const summary = report?.summary || {};
+      const messageAr = report?.message_ar || "";
+      const messageEn = report?.message_en || "";
+
+      setExtractReport(report);
+
+      const extractedKeys = Object.keys(indicators);
+      const hasExtracted = extractedKeys.length > 0;
+
+      if (hasExtracted) {
         setMlFeatures((prev: any) => {
           const updated = { ...prev };
-          Object.entries(extracted).forEach(([key, val]) => {
-            if (val !== null && val !== undefined) {
-              updated[key] = val;
-            }
+          Object.entries(indicators).forEach(([key, val]: any) => {
+            if (val !== null && val !== undefined) updated[key] = val;
           });
           return updated;
         });
-        
-        // Auto-run the prediction with the newly extracted features!
+
         const mergedFeatures = { ...mlFeatures };
-        Object.entries(extracted).forEach(([key, val]) => {
-          if (val !== null && val !== undefined) {
-            mergedFeatures[key] = val;
-          }
+        Object.entries(indicators).forEach(([key, val]: any) => {
+          if (val !== null && val !== undefined) mergedFeatures[key] = val;
         });
-        
+
         setMlLoading(true);
         setMlError("");
         try {
-          const res = await api.predictHeart(mergedFeatures);
+          const res = await api.predictHeart({
+            ...mergedFeatures,
+            extracted_keys: extractedKeys,
+          });
           if (res.available === false) {
             setMlError(res.detail || "Model not available");
+          } else if (res.can_predict === false) {
+            setMlError(locale === "ar" ? res.message_ar : res.message_en);
+            setMlResult(null);
           } else {
             setMlResult(res);
           }
@@ -541,26 +572,44 @@ ${mlContext}
         } finally {
           setMlLoading(false);
         }
-
-        // Show a nice feedback message to the user!
-        const listStr = Object.keys(extracted)
-          .map((k) => mlFields.find((f) => f.key === k)?.label || k)
-          .join("، ");
-        alert(locale === "ar" 
-          ? `تم استخراج وتعبئة المؤشرات التالية بنجاح: ${listStr}` 
-          : `Successfully extracted and populated: ${listStr}`
-        );
-      } else {
-        alert(locale === "ar"
-          ? "لم يتم العثور على أي مؤشرات صحية متطابقة في الملفات المحددة."
-          : "No matching clinical parameters found in the selected files."
-        );
       }
+
+      const listStr = extractedKeys
+        .map((k) => {
+          const field = mlFields.find((f) => f.key === k);
+          const val = indicators[k];
+          return field ? `${field.label}: ${val}` : `${k}: ${val}`;
+        })
+        .join("، ");
+
+      const missingStr = (summary.missing_keys || [])
+        .map((k: string) => mlFields.find((f) => f.key === k)?.label || k)
+        .join("، ");
+
+      const invalidStr = (summary.invalid_keys || [])
+        .map((k: string) => mlFields.find((f) => f.key === k)?.label || k)
+        .join("، ");
+
+      let fullMsg = locale === "ar" ? messageAr : messageEn;
+      if (hasExtracted && listStr) {
+        fullMsg += `\n\n${locale === "ar" ? "✓ المؤشرات المستخرجة:" : "✓ Extracted:"} ${listStr}`;
+      }
+      if (missingStr) {
+        fullMsg += `\n${locale === "ar" ? "✗ المؤشرات المفقودة (مطلوبة):" : "✗ Missing (required):"} ${missingStr}`;
+      }
+      if (invalidStr) {
+        fullMsg += `\n⚠️ ${locale === "ar" ? "قيم خارج النطاق (مرفوضة):" : "Out of range (rejected):"} ${invalidStr}`;
+      }
+
+      await showAlert({ type: "info", title: locale === "ar" ? "نتائج الاستخراج" : "Extraction Results", message: fullMsg });
     } catch (err: any) {
-      alert(locale === "ar"
-        ? `خطأ أثناء استخراج المؤشرات: ${err?.message || "فشل الاتصال"}`
-        : `Error extracting indicators: ${err?.message || "Connection failed"}`
-      );
+      showToast({
+        type: "error",
+        title: locale === "ar" ? "خطأ" : "Error",
+        message: locale === "ar"
+          ? `خطأ أثناء استخراج المؤشرات: ${err?.message || "فشل الاتصال"}`
+          : `Error extracting indicators: ${err?.message || "Connection failed"}`
+      });
     } finally {
       setAiExtracting(false);
     }
@@ -625,7 +674,7 @@ ${mlContext}
                   />
                   <div className="space-y-1">
                     <p className="text-[10px] font-bold uppercase tracking-wider text-text-muted">{locale === "ar" ? "الاستنتاج الإحصائي" : "Statistical Conclusion"}</p>
-                    <p className="text-base font-bold text-text">{mlResult.prediction_label}</p>
+                    <p className="text-base font-bold text-text">{locale === "ar" ? (mlResult.prediction_label || mlResult.prediction_label_en) : (mlResult.prediction_label_en || mlResult.prediction_label)}</p>
                     <div className="mt-2.5">
                       <span
                         className={`inline-flex items-center gap-1.5 rounded-lg border px-3 py-1 text-xs font-bold uppercase tracking-wider ${
@@ -635,7 +684,7 @@ ${mlContext}
                         }`}
                       >
                         {locale === "ar" ? "مستوى الخطر: " : "Risk Level: "} 
-                        {mlResult.risk_level_ar || mlResult.risk_level}
+                        {locale === "ar" ? (mlResult.risk_level_ar || mlResult.risk_level) : (mlResult.risk_level || mlResult.risk_level_ar)}
                       </span>
                     </div>
                   </div>
@@ -651,7 +700,7 @@ ${mlContext}
                       return (
                         <div key={i} className="space-y-1">
                           <div className="flex items-center justify-between text-xs">
-                            <span className="font-semibold text-text-secondary">{tf.feature}</span>
+                            <span className="font-semibold text-text-secondary">{locale === "ar" ? (tf.feature || tf.feature_en) : (tf.feature_en || tf.feature)}</span>
                             <span className="font-bold text-accent">{pct.toFixed(1)}%</span>
                           </div>
                           <div className="h-2 w-full rounded-full bg-slate-100 overflow-hidden">
@@ -913,38 +962,112 @@ ${mlContext}
               </div>
               
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                {mlFields.map((f) => (
-                  <div key={f.key} className="space-y-1">
-                    <Label className="text-[11px] font-bold text-text-secondary">{f.label}</Label>
-                    {f.options ? (
-                      <Select
-                        value={String(mlFeatures[f.key])}
-                        onChange={(e) => {
-                          const val = e.target.value;
-                          setMlFeatures((prev: any) => ({ ...prev, [f.key]: val === "" ? 0 : parseFloat(val) }));
-                        }}
-                        className="rounded-xl border-slate-200/80 bg-white py-1 text-xs"
-                      >
-                        {f.options.map((o) => (
-                          <option key={o.value} value={o.value}>
-                            {o.label}
-                          </option>
-                        ))}
-                      </Select>
+                {mlFields.map((f) => {
+                  const detail = extractReport?.details?.find((d: any) => d.key === f.key);
+                  const isExtracted = detail?.status === "extracted";
+                  const isInvalid = detail?.status === "invalid";
+                  const isMissing = detail?.status === "missing";
+                  const sourceTooltip = detail ? (locale === "ar" ? detail.source_ar : detail.source_en) : "";
+                  return (
+                    <div key={f.key} className="space-y-1">
+                      <Label className="text-[11px] font-bold text-text-secondary flex items-center gap-1">
+                        {f.label}
+                        {isExtracted && <span title={sourceTooltip} className="text-emerald-600">✓</span>}
+                        {isInvalid && <span title={locale === "ar" ? "قيمة خارج النطاق" : "Out of range"} className="text-red-500">⚠</span>}
+                        {isMissing && extractReport && <span title={locale === "ar" ? "مفقود - مطلوب" : "Missing - required"} className="text-amber-500">✗</span>}
+                      </Label>
+                      {f.options ? (
+                        <Select
+                          value={String(mlFeatures[f.key] === "" || mlFeatures[f.key] === undefined ? "" : mlFeatures[f.key])}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            setMlFeatures((prev: any) => ({ ...prev, [f.key]: val === "" ? "" : parseFloat(val) }));
+                          }}
+                          className={`rounded-xl py-1 text-xs ${
+                            isExtracted ? "border-emerald-300 bg-emerald-50/40"
+                            : isInvalid ? "border-red-200 bg-red-50/30"
+                            : (mlFeatures[f.key] === "" || mlFeatures[f.key] === undefined) ? "border-amber-300 bg-amber-50/30"
+                            : "border-slate-200/80 bg-white"
+                          }`}
+                        >
+                          <option value="">{locale === "ar" ? "-- اختر --" : "-- Select --"}</option>
+                          {f.options.map((o) => (
+                            <option key={o.value} value={o.value}>
+                              {o.label}
+                            </option>
+                          ))}
+                        </Select>
+                      ) : (
+                        <Input
+                          type={f.type || "text"}
+                          placeholder={locale === "ar" ? "أدخل القيمة" : "Enter value"}
+                          value={mlFeatures[f.key] === undefined ? "" : mlFeatures[f.key]}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            setMlFeatures((prev: any) => ({ ...prev, [f.key]: val === "" ? "" : parseFloat(val) }));
+                          }}
+                          className={`rounded-xl py-1 text-xs ${
+                            isExtracted ? "border-emerald-300 bg-emerald-50/40"
+                            : isInvalid ? "border-red-200 bg-red-50/30"
+                            : (mlFeatures[f.key] === "" || mlFeatures[f.key] === undefined) ? "border-amber-300 bg-amber-50/30"
+                            : "border-slate-200/80 bg-white"
+                          }`}
+                        />
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+
+              {extractReport && (
+                <div className={`mt-4 rounded-xl border p-3 text-xs space-y-2 ${
+                  extractReport.summary?.complete
+                    ? "border-emerald-200 bg-emerald-50/40"
+                    : "border-amber-200 bg-amber-50/40"
+                }`}>
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2 font-bold text-text">
+                      <span>{extractReport.summary?.complete ? "✅" : "⚠️"}</span>
+                      <span>{locale === "ar" ? "تقرير استخراج البيانات" : "Data Extraction Report"}</span>
+                    </div>
+                    {extractReport.summary?.complete ? (
+                      <span className="rounded-full bg-emerald-100 px-2.5 py-0.5 text-emerald-800 font-bold text-[10px]">
+                        {locale === "ar" ? "مكتمل" : "Complete"}
+                      </span>
                     ) : (
-                      <Input
-                        type={f.type || "text"}
-                        value={mlFeatures[f.key]}
-                        onChange={(e) => {
-                          const val = e.target.value;
-                          setMlFeatures((prev: any) => ({ ...prev, [f.key]: val === "" ? 0 : parseFloat(val) }));
-                        }}
-                        className="rounded-xl border-slate-200/80 bg-white py-1 text-xs"
-                      />
+                      <span className="rounded-full bg-amber-100 px-2.5 py-0.5 text-amber-800 font-bold text-[10px]">
+                        {locale === "ar" ? "غير مكتمل" : "Incomplete"}
+                      </span>
                     )}
                   </div>
-                ))}
-              </div>
+                  <div className="flex flex-wrap gap-2">
+                    <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-emerald-700 font-bold border border-emerald-100">
+                      ✓ {locale === "ar" ? "مستخرج:" : "Extracted:"} {extractReport.summary?.extracted_count ?? 0}/{extractReport.summary?.total_count ?? 13}
+                    </span>
+                    {(extractReport.summary?.missing_count ?? 0) > 0 && (
+                      <span className="rounded-full bg-amber-50 px-2 py-0.5 text-amber-700 font-bold border border-amber-100">
+                        ✗ {locale === "ar" ? "مفقود (مطلوب):" : "Missing (required):"} {extractReport.summary?.missing_count}
+                      </span>
+                    )}
+                    {(extractReport.summary?.invalid_count ?? 0) > 0 && (
+                      <span className="rounded-full bg-red-50 px-2 py-0.5 text-red-700 font-bold border border-red-100">
+                        ⚠ {locale === "ar" ? "خارج النطاق:" : "Invalid:"} {extractReport.summary?.invalid_count}
+                      </span>
+                    )}
+                    {mlResult?.reliability && (
+                      <span className={`rounded-full px-2 py-0.5 font-bold ${mlResult.reliability === "high" ? "bg-emerald-50 text-emerald-700" : mlResult.reliability === "medium" ? "bg-amber-50 text-amber-700" : "bg-red-50 text-red-700"}`}>
+                        {locale === "ar" ? "موثوقية:" : "Reliability:"} {locale === "ar" ? (mlResult.reliability_ar || mlResult.reliability) : mlResult.reliability}
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-text-muted leading-relaxed whitespace-pre-line">{locale === "ar" ? (extractReport.message_ar || extractReport.message_en) : (extractReport.message_en || extractReport.message_ar)}</p>
+                  {extractReport.summary?.had_error && (
+                    <p className="text-red-600 text-[11px]">
+                      {locale === "ar" ? "حدث خطأ مؤقت أثناء الاستخراج (تمت إعادة المحاولة)." : "Transient error occurred (retried)."}: {extractReport.summary.error}
+                    </p>
+                  )}
+                </div>
+              )}
             </div>
 
             {/* Column 2: Radial Gauge & Results */}
@@ -963,7 +1086,7 @@ ${mlContext}
                       />
                       <div className="text-center sm:text-right space-y-1">
                         <p className="text-[9px] font-bold uppercase tracking-wider text-text-muted">{locale === "ar" ? "الاستنتاج" : "Conclusion"}</p>
-                        <p className="text-sm font-bold text-text">{mlResult.prediction_label}</p>
+                        <p className="text-sm font-bold text-text">{locale === "ar" ? (mlResult.prediction_label || mlResult.prediction_label_en) : (mlResult.prediction_label_en || mlResult.prediction_label)}</p>
                         <div className="mt-1.5">
                           <span
                             className={`inline-flex items-center gap-1 rounded-lg border px-2.5 py-0.5 text-[11px] font-bold uppercase tracking-wider ${
@@ -973,7 +1096,7 @@ ${mlContext}
                             }`}
                           >
                             {locale === "ar" ? "مستوى الخطر: " : "Risk: "}
-                            {mlResult.risk_level_ar || mlResult.risk_level}
+                            {locale === "ar" ? (mlResult.risk_level_ar || mlResult.risk_level) : (mlResult.risk_level || mlResult.risk_level_ar)}
                           </span>
                         </div>
                       </div>
@@ -989,7 +1112,7 @@ ${mlContext}
                           return (
                             <div key={i} className="space-y-0.5">
                               <div className="flex items-center justify-between text-[11px]">
-                                <span className="font-semibold text-text-secondary">{tf.feature}</span>
+                                <span className="font-semibold text-text-secondary">{locale === "ar" ? (tf.feature || tf.feature_en) : (tf.feature_en || tf.feature)}</span>
                                 <span className="font-bold text-accent">{pct.toFixed(1)}%</span>
                               </div>
                               <div className="h-1.5 w-full rounded-full bg-slate-100 overflow-hidden">
@@ -1022,13 +1145,29 @@ ${mlContext}
               </div>
 
               <div className="space-y-2.5 pt-4 border-t border-slate-100">
-                <button
-                  onClick={handleMLPredict}
-                  disabled={mlLoading}
-                  className="w-full rounded-xl bg-accent py-2.5 text-xs font-semibold text-white shadow-sm shadow-accent/10 transition-all hover:bg-accent-hover active:scale-[0.98] disabled:opacity-50"
-                >
-                  {mlLoading ? t("diagnosis.mlPredicting") : t("diagnosis.mlPredictBtn")}
-                </button>
+                {(() => {
+                  const filledCount = mlFields.filter((f) => mlFeatures[f.key] !== "" && mlFeatures[f.key] !== undefined && mlFeatures[f.key] !== null).length;
+                  const totalCount = mlFields.length;
+                  const isComplete = filledCount === totalCount;
+                  return (
+                    <>
+                      <div className={`text-center text-[11px] font-bold ${isComplete ? "text-emerald-600" : "text-amber-600"}`}>
+                        {isComplete
+                          ? (locale === "ar" ? `✓ جميع المؤشرات مكتملة (${totalCount}/${totalCount})` : `✓ All indicators complete (${totalCount}/${totalCount})`)
+                          : (locale === "ar" ? `تم توفير ${filledCount} من ${totalCount} مؤشر — أكمل الباقي للتشخيص` : `${filledCount} of ${totalCount} indicators provided — complete the rest to diagnose`)}
+                      </div>
+                      <button
+                        onClick={handleMLPredict}
+                        disabled={mlLoading || !isComplete}
+                        className={`w-full rounded-xl py-2.5 text-xs font-semibold text-white shadow-sm transition-all active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed ${
+                          isComplete ? "bg-accent hover:bg-accent-hover shadow-accent/10" : "bg-slate-400"
+                        }`}
+                      >
+                        {mlLoading ? t("diagnosis.mlPredicting") : isComplete ? t("diagnosis.mlPredictBtn") : (locale === "ar" ? "أكمل المؤشرات أولاً" : "Complete indicators first")}
+                      </button>
+                    </>
+                  );
+                })()}
                 
                 <div className="flex gap-2">
                   <button
@@ -1088,7 +1227,7 @@ ${mlContext}
                 />
               </div>
               <div className="flex-1 space-y-1 min-w-0">
-                <p className="text-xs font-bold text-text truncate">{mlResult.prediction_label}</p>
+                <p className="text-xs font-bold text-text truncate">{locale === "ar" ? (mlResult.prediction_label || mlResult.prediction_label_en) : (mlResult.prediction_label_en || mlResult.prediction_label)}</p>
                 <div>
                   <span
                     className={`inline-flex items-center rounded-md border px-1.5 py-0.5 text-[9px] font-bold ${
@@ -1097,7 +1236,7 @@ ${mlContext}
                       riskColors[mlResult.risk_level]?.border
                     }`}
                   >
-                    {mlResult.risk_level_ar || mlResult.risk_level}
+                    {locale === "ar" ? (mlResult.risk_level_ar || mlResult.risk_level) : (mlResult.risk_level || mlResult.risk_level_ar)}
                   </span>
                 </div>
               </div>
