@@ -105,7 +105,7 @@ async def send_message(
     db.add(user_msg)
     db.commit()
 
-    context = diagnosis_engine.gather_context(session.patient_id, db)
+    context = diagnosis_engine.gather_context(session.patient_id, db, session_id=session_id)
     context_msg = diagnosis_engine.build_context_message(context)
 
     history = (
@@ -132,6 +132,11 @@ async def send_message(
     if result["diagnosis"]:
         session.diagnosis_result = result["diagnosis"]
         session.status = "completed"
+
+    if result.get("extracted_indicators"):
+        merged = dict(session.clinical_indicators or {})
+        merged.update(result["extracted_indicators"])
+        session.clinical_indicators = merged
 
     db.commit()
     db.refresh(ai_msg)
@@ -166,7 +171,7 @@ async def stream_message(
     db.add(user_msg)
     db.commit()
 
-    context = diagnosis_engine.gather_context(session.patient_id, db)
+    context = diagnosis_engine.gather_context(session.patient_id, db, session_id=session_id)
     context_msg = diagnosis_engine.build_context_message(context)
 
     history = (
@@ -223,6 +228,12 @@ async def stream_message(
                 if sess:
                     sess.diagnosis_result = diagnosis_data
                     sess.status = "completed"
+            if indicator_data:
+                sess = db2.query(ChatSession).filter(ChatSession.id == session_id_final).first()
+                if sess:
+                    merged = dict(sess.clinical_indicators or {})
+                    merged.update(indicator_data)
+                    sess.clinical_indicators = merged
             db2.commit()
         finally:
             db2.close()
@@ -309,19 +320,38 @@ async def extract_file_indicators(
     from app.services.file_processor import file_processor
     file_images = []
     for f in files:
-        if f.file_type != "image":
-            continue
-        data = storage_service.download_file(f.storage_key)
-        if data is None:
-            continue
-        prepared = file_processor.prepare_image_for_vision(data)
-        if prepared:
-            file_images.append({
-                "data": file_processor.encode_image_for_vision(prepared),
-                "mime_type": "image/png",
-                "file_name": f.file_name,
-            })
+        if f.file_type == "image":
+            data = storage_service.download_file(f.storage_key)
+            if data is None:
+                continue
+            prepared = file_processor.prepare_image_for_vision(data)
+            if prepared:
+                file_images.append({
+                    "data": file_processor.encode_image_for_vision(prepared),
+                    "mime_type": "image/png",
+                    "file_name": f.file_name,
+                })
+        elif f.file_type == "pdf":
+            data = storage_service.download_file(f.storage_key)
+            if data is None:
+                continue
+            page_images = file_processor.pdf_to_images(data)
+            for idx, page_img in enumerate(page_images):
+                file_images.append({
+                    "data": file_processor.encode_image_for_vision(page_img),
+                    "mime_type": "image/png",
+                    "file_name": f"{f.file_name} (page {idx + 1})",
+                })
 
     from app.services.openai_service import extract_indicators_from_text_and_images
-    extracted = await extract_indicators_from_text_and_images(text_content, file_images)
-    return extracted
+    report = await extract_indicators_from_text_and_images(text_content, file_images)
+
+    indicators = report.get("indicators", {})
+    if indicators:
+        for f in files:
+            merged = dict(f.extracted_indicators or {})
+            merged.update(indicators)
+            f.extracted_indicators = merged
+        db.commit()
+
+    return report

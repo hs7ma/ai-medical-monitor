@@ -9,6 +9,9 @@ logger = logging.getLogger(__name__)
 ALLOWED_IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp", "image/tiff", "image/bmp"}
 ALLOWED_PDF_TYPE = "application/pdf"
 
+DEFAULT_PDF_RENDER_DPI = 150
+DEFAULT_PDF_MAX_PAGES = 6
+
 
 class FileProcessor:
     def is_image(self, mime_type: str) -> bool:
@@ -31,6 +34,39 @@ class FileProcessor:
         except Exception as e:
             logger.error("PDF text extraction error: %s", e)
             return ""
+
+    def pdf_to_images(
+        self,
+        data: bytes,
+        max_pages: int = DEFAULT_PDF_MAX_PAGES,
+        dpi: int = DEFAULT_PDF_RENDER_DPI,
+    ) -> list[bytes]:
+        """Render PDF pages to PNG images using PyMuPDF (fitz).
+
+        This lets Vision analyze graphical content in PDFs (e.g. ECG waveforms,
+        charts, imaging) that pdfplumber cannot capture as text.
+        """
+        try:
+            import fitz  # PyMuPDF
+
+            images: list[bytes] = []
+            zoom = dpi / 72.0
+            matrix = fitz.Matrix(zoom, zoom)
+            with fitz.open(stream=data, filetype="pdf") as doc:
+                total = len(doc)
+                page_count = min(total, max_pages)
+                for i in range(page_count):
+                    page = doc.load_page(i)
+                    pix = page.get_pixmap(matrix=matrix)
+                    png_bytes = pix.tobytes(output="png")
+                    prepared = self.prepare_image_for_vision(png_bytes)
+                    if prepared:
+                        images.append(prepared)
+            logger.info("Rendered %d/%d PDF pages to images", len(images), total)
+            return images
+        except Exception as e:
+            logger.error("PDF to images error: %s", e)
+            return []
 
     def extract_text_from_image(self, data: bytes) -> str:
         try:

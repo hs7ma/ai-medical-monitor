@@ -26,3 +26,13 @@ class VitalReading(BaseModel):
     heart_rate: Optional[float]
     temperature: Optional[float]
     confidence: Optional[int]
+
+
+class SensorVitalsCreate(BaseModel):
+    spo2: Optional[float] = None
+    heart_rate: Optional[float] = None
+    temperature: Optional[float] = None
+    confidence: Optional[int] = 0
+    finger_detected: Optional[bool] = False
+    wifi_rssi: Optional[int] = 0
+    source: Optional[str] = "sensor"

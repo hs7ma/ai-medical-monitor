@@ -1,15 +1,20 @@
 from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect
 from sqlalchemy.orm import Session
 from typing import List, Optional
+import asyncio
+import logging
 
 from app.db.session import get_db
 from app.api.deps import require_role, get_current_user_ws
-from app.db.influx import query_vitals
+from app.db.influx import query_vitals, write_vitals
 from app.models.user import User, UserRole
 from app.models.bed import Bed
 from app.models.patient import Patient
-from app.schemas.bed import BedOut, BedAssign, VitalReading
+from app.models.vital_reading import VitalReading as VitalReadingModel
+from app.schemas.bed import BedOut, BedAssign, VitalReading, SensorVitalsCreate
 from app.services.ws_hub import ws_hub
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/beds", tags=["beds"])
 
@@ -33,6 +38,57 @@ def get_bed_vitals(
     if not bed:
         raise HTTPException(status_code=404, detail="Bed not found")
     return query_vitals(bed_id, minutes=minutes)
+
+
+@router.post("/{bed_id}/vitals", status_code=201)
+async def submit_sensor_vitals(
+    bed_id: str,
+    payload: SensorVitalsCreate,
+    db: Session = Depends(get_db),
+):
+    """Receive vitals from an ESP32 sensor device over HTTP.
+
+    Mirrors the MQTT subscriber pipeline: saves to SQLite, writes to
+    InfluxDB, and broadcasts to connected WebSocket clients.
+    """
+    bed = db.query(Bed).filter(Bed.id == bed_id).first()
+    if not bed:
+        raise HTTPException(status_code=404, detail="Bed not found")
+    if not bed.patient_id:
+        raise HTTPException(status_code=409, detail="No patient assigned to this bed")
+
+    reading = VitalReadingModel(
+        patient_id=bed.patient_id,
+        spo2=payload.spo2,
+        heart_rate=payload.heart_rate,
+        temperature=payload.temperature,
+        confidence=payload.confidence or 0,
+        source=payload.source or "sensor",
+    )
+    db.add(reading)
+    db.commit()
+    db.refresh(reading)
+
+    vital_data = {
+        "bed_id": bed_id,
+        "patient_id": bed.patient_id,
+        "spo2": payload.spo2,
+        "heart_rate": payload.heart_rate,
+        "temperature": payload.temperature,
+        "confidence": payload.confidence or 0,
+        "finger_detected": payload.finger_detected,
+        "wifi_rssi": payload.wifi_rssi or 0,
+        "source": payload.source or "sensor",
+    }
+
+    try:
+        await asyncio.to_thread(write_vitals, vital_data)
+    except Exception as e:
+        logger.warning("InfluxDB write failed for bed %s: %s", bed_id, e)
+
+    await ws_hub.broadcast_vitals(vital_data)
+
+    return {"status": "ok", "id": reading.id, "patient_id": bed.patient_id}
 
 
 @router.post("/{bed_id}/assign", response_model=BedOut)

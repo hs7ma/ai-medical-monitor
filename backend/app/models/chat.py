@@ -14,6 +14,7 @@ class ChatSession(Base):
     title = Column(String(200), default="جلسة تشخيص جديدة")
     status = Column(String(20), default="active")
     diagnosis_result = Column(JSON, nullable=True)
+    clinical_indicators = Column(JSON, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 

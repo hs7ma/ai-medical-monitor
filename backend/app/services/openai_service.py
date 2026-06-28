@@ -1,12 +1,63 @@
 import json
 import logging
 import base64
+import asyncio
 from typing import Any, Optional, AsyncGenerator
 import httpx
 
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
+
+FEATURE_KEYS = ["age", "sex", "cp", "trestbps", "chol", "fbs", "restecg", "thalach", "exang", "oldpeak", "slope", "ca", "thal"]
+
+FEATURE_RANGES = {
+    "age": (1, 120),
+    "sex": (0, 1),
+    "cp": (0, 3),
+    "trestbps": (80, 250),
+    "chol": (80, 600),
+    "fbs": (0, 1),
+    "restecg": (0, 2),
+    "thalach": (60, 220),
+    "exang": (0, 1),
+    "oldpeak": (-3, 10),
+    "slope": (0, 2),
+    "ca": (0, 4),
+    "thal": (0, 3),
+}
+
+FEATURE_LABELS_AR = {
+    "age": "العمر",
+    "sex": "الجنس",
+    "cp": "نوع ألم الصدر",
+    "trestbps": "ضغط الدم",
+    "chol": "الكوليسترول",
+    "fbs": "سكر الصيام",
+    "restecg": "تخطيط القلب",
+    "thalach": "أقصى نبض",
+    "exang": "ذبحة مجهدة",
+    "oldpeak": "انخفاض ST",
+    "slope": "ميل ST",
+    "ca": "الأوعية الملونة",
+    "thal": "الثلاسيميا",
+}
+
+FEATURE_LABELS_EN = {
+    "age": "Age",
+    "sex": "Sex",
+    "cp": "Chest Pain Type",
+    "trestbps": "Resting BP",
+    "chol": "Cholesterol",
+    "fbs": "Fasting BS",
+    "restecg": "Resting ECG",
+    "thalach": "Max HR",
+    "exang": "Exercise Angina",
+    "oldpeak": "ST Depression",
+    "slope": "ST Slope",
+    "ca": "Vessels",
+    "thal": "Thalassemia",
+}
 
 SYSTEM_PROMPT = """أنت مساعد طبي ذكي متخصص في تشخيص الأمراض والكشف المبكر.
 تعمل كأداة مساعدة للطاقم الطبي لمتابعة حالة المريض وتشخيصها عبر خطة تشخيصية منظمة.
@@ -300,6 +351,21 @@ async def extract_indicators_from_text_and_images(
     text: str,
     file_images: Optional[list[dict]] = None,
 ) -> dict:
+    """Extract the 13 heart-disease indicators from text + images via OpenAI.
+
+    Returns a detailed report:
+      {
+        "indicators": { key: value, ... },      # only successfully extracted, validated
+        "details": [ { key, label, value, status, source }, ... ],
+        "summary": { extracted_count, missing_count, invalid_count, extracted_keys, missing_keys, invalid_keys },
+        "message_ar": " human-readable Arabic summary ",
+      }
+
+    Reliability:
+      - Retries up to 3 times on network/HTTP/parse errors.
+      - Validates every value against FEATURE_RANGES; out-of-range values are flagged invalid.
+      - Never raises: always returns a report dict (even on total failure).
+    """
     prompt = """أنت خبير تحليل تقارير وفحوصات طبية.
 مهمتك هي مراجعة محتوى الفحوصات والتقارير الطبية المرفقة (سواء كانت نصاً مستخرجاً أو صوراً) واستخراج أي من المؤشرات الـ 13 التالية الخاصة بصحة القلب والشرايين:
 
@@ -351,26 +417,135 @@ async def extract_indicators_from_text_and_images(
         "Content-Type": "application/json",
     }
 
-    async with httpx.AsyncClient(timeout=120.0) as client:
-        resp = await client.post(
-            "https://api.openai.com/v1/chat/completions",
-            json=payload,
-            headers=headers,
-        )
-        resp.raise_for_status()
-        data = resp.json()
+    raw_extracted: dict = {}
+    last_error: Optional[str] = None
+    max_retries = 3
 
-    content = data["choices"][0]["message"]["content"]
-    try:
-        extracted = json.loads(content)
-        result = {}
-        for key in ["age", "sex", "cp", "trestbps", "chol", "fbs", "restecg", "thalach", "exang", "oldpeak", "slope", "ca", "thal"]:
-            if key in extracted and extracted[key] is not None:
-                try:
-                    result[key] = float(extracted[key])
-                except (ValueError, TypeError):
-                    pass
-        return result
-    except Exception as e:
-        logger.error("Failed to parse extracted indicators: %s", e)
-        return {}
+    for attempt in range(1, max_retries + 1):
+        try:
+            async with httpx.AsyncClient(timeout=120.0) as client:
+                resp = await client.post(
+                    "https://api.openai.com/v1/chat/completions",
+                    json=payload,
+                    headers=headers,
+                )
+                resp.raise_for_status()
+                data = resp.json()
+
+            content = data["choices"][0]["message"]["content"]
+            raw_extracted = json.loads(content)
+            last_error = None
+            break
+        except httpx.HTTPStatusError as e:
+            last_error = f"HTTP {e.response.status_code}: {e.response.text[:200]}"
+            logger.warning("Extract indicators attempt %d failed (HTTP): %s", attempt, last_error)
+        except (httpx.RequestError, json.JSONDecodeError, KeyError, IndexError) as e:
+            last_error = f"{type(e).__name__}: {e}"
+            logger.warning("Extract indicators attempt %d failed: %s", attempt, last_error)
+        if attempt < max_retries:
+            await asyncio.sleep(2 * attempt)
+
+    indicators: dict[str, float] = {}
+    details: list[dict] = []
+    extracted_keys: list[str] = []
+    missing_keys: list[str] = []
+    invalid_keys: list[str] = []
+
+    for key in FEATURE_KEYS:
+        lo, hi = FEATURE_RANGES[key]
+        label_ar = FEATURE_LABELS_AR.get(key, key)
+        label_en = FEATURE_LABELS_EN.get(key, key)
+        raw_val = raw_extracted.get(key) if raw_extracted else None
+
+        if raw_val is None:
+            missing_keys.append(key)
+            details.append({"key": key, "label_ar": label_ar, "label_en": label_en, "value": None, "status": "missing", "source": None})
+            continue
+
+        try:
+            val = float(raw_val)
+        except (ValueError, TypeError):
+            invalid_keys.append(key)
+            details.append({"key": key, "label_ar": label_ar, "label_en": label_en, "value": None, "status": "invalid", "source": "ai", "raw": str(raw_val)})
+            continue
+
+        if val < lo or val > hi:
+            invalid_keys.append(key)
+            details.append({"key": key, "label_ar": label_ar, "label_en": label_en, "value": None, "status": "invalid", "source": "ai", "raw": val, "range": [lo, hi]})
+            continue
+
+        indicators[key] = val
+        extracted_keys.append(key)
+        details.append({"key": key, "label_ar": label_ar, "label_en": label_en, "value": val, "status": "extracted", "source": "ai"})
+
+    extracted_count = len(extracted_keys)
+    missing_count = len(missing_keys)
+    invalid_count = len(invalid_keys)
+    total_count = len(FEATURE_KEYS)
+    complete = missing_count == 0 and invalid_count == 0
+
+    invalid_labels_ar = "، ".join(FEATURE_LABELS_AR.get(k, k) for k in invalid_keys)
+    invalid_labels_en = ", ".join(FEATURE_LABELS_EN.get(k, k) for k in invalid_keys)
+    missing_labels_ar = "، ".join(FEATURE_LABELS_AR.get(k, k) for k in missing_keys)
+    missing_labels_en = ", ".join(FEATURE_LABELS_EN.get(k, k) for k in missing_keys)
+
+    if complete and not last_error:
+        message_ar = f"✓ تم استخراج جميع المؤشرات السريرية الـ {total_count} بنجاح. النموذج المحلي جاهز للحساب."
+        message_en = f"✓ All {total_count} clinical indicators extracted successfully. The local model is ready for prediction."
+    elif last_error and not indicators:
+        message_ar = (
+            f"تعذّر استخراج المؤشرات من الملفات بعد {max_retries} محاولات.\n"
+            f"السبب: {last_error}\n\n"
+            f"يجب توفير جميع المؤشرات الـ {total_count} يدوياً قبل إجراء التشخيص."
+        )
+        message_en = (
+            f"Failed to extract indicators after {max_retries} attempts.\n"
+            f"Reason: {last_error}\n\n"
+            f"All {total_count} indicators must be provided manually before running the diagnosis."
+        )
+    else:
+        parts_ar = []
+        parts_en = []
+        parts_ar.append(f"تم استخراج {extracted_count} من {total_count} مؤشر سريري.")
+        parts_en.append(f"Extracted {extracted_count} of {total_count} clinical indicators.")
+
+        if invalid_count > 0:
+            parts_ar.append(f"⚠ تم استبعاد {invalid_count} مؤشر لقيم خارج النطاق المسموح: {invalid_labels_ar}.")
+            parts_en.append(f"⚠ {invalid_count} excluded for out-of-range values: {invalid_labels_en}.")
+
+        if missing_count > 0:
+            parts_ar.append(f"✗ المؤشرات التالية مفقودة ويجب توفيرها: {missing_labels_ar}.")
+            parts_en.append(f"✗ The following indicators are missing and must be provided: {missing_labels_en}.")
+
+        if last_error:
+            parts_ar.append(f"ملاحظة: حدث خطأ مؤقت أثناء إحدى المحاولات ({last_error}).")
+            parts_en.append(f"Note: a transient error occurred during one attempt ({last_error}).")
+
+        if missing_count > 0 or invalid_count > 0:
+            parts_ar.append("لا يمكن إجراء التشخيص حتى تكتمل جميع المؤشرات.")
+            parts_en.append("Diagnosis cannot proceed until all indicators are complete.")
+
+        message_ar = "\n".join(parts_ar)
+        message_en = "\n".join(parts_en)
+
+    return {
+        "indicators": indicators,
+        "details": details,
+        "summary": {
+            "extracted_count": extracted_count,
+            "missing_count": missing_count,
+            "invalid_count": invalid_count,
+            "total_count": total_count,
+            "complete": complete,
+            "can_predict": complete,
+            "extracted_keys": extracted_keys,
+            "missing_keys": missing_keys,
+            "invalid_keys": invalid_keys,
+            "missing_labels_ar": missing_labels_ar,
+            "missing_labels_en": missing_labels_en,
+            "had_error": last_error is not None,
+            "error": last_error,
+        },
+        "message_ar": message_ar,
+        "message_en": message_en,
+    }

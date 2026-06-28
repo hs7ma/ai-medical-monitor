@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 
 class DiagnosisEngine:
-    def gather_context(self, patient_id: int, db: Session) -> dict[str, Any]:
+    def gather_context(self, patient_id: int, db: Session, session_id: Optional[int] = None) -> dict[str, Any]:
         patient = db.query(Patient).filter(Patient.id == patient_id).first()
         if not patient:
             raise ValueError("Patient not found")
@@ -23,7 +23,15 @@ class DiagnosisEngine:
         vitals_summary = self._get_vitals_summary(patient_id, db)
         files_context = self._build_files_context(files)
         file_images = self._load_file_images(files)
-        ml_prediction = self._get_ml_prediction(patient, db)
+
+        session_indicators = None
+        if session_id:
+            from app.models.chat import ChatSession
+            session = db.query(ChatSession).filter(ChatSession.id == session_id).first()
+            if session and session.clinical_indicators:
+                session_indicators = session.clinical_indicators
+
+        ml_prediction = self._get_ml_prediction(patient, db, session_indicators)
 
         context = {
             "patient": {
@@ -99,7 +107,7 @@ class DiagnosisEngine:
             logger.warning("Failed to get vitals: %s", e)
             return "لا توجد علامات حيوية متاحة"
 
-    def _get_ml_prediction(self, patient: Patient, db: Session) -> Optional[dict]:
+    def _get_ml_prediction(self, patient: Patient, db: Session, session_indicators: Optional[dict] = None) -> Optional[dict]:
         try:
             from app.services.ml_service import heart_prediction_service
             if not heart_prediction_service.is_available():
@@ -113,29 +121,53 @@ class DiagnosisEngine:
                 .first()
             )
 
-            features = {
-                "age": float(patient.age or 50),
-                "sex": 1.0 if (patient.gender or "").lower().startswith("m") else 0.0,
-                "cp": 0,
-                "trestbps": 120,
-                "chol": 200,
-                "fbs": 0,
-                "restecg": 0,
-                "thalach": 150,
-                "exang": 0,
-                "oldpeak": 0,
-                "slope": 1,
-                "ca": 0,
-                "thal": 0,
-            }
+            features: dict = {}
 
+            if patient.age is not None:
+                features["age"] = float(patient.age)
+            if patient.gender:
+                features["sex"] = 1.0 if patient.gender.lower().startswith("m") else 0.0
+
+            vital_keys: set = set()
             if latest_vital:
                 if latest_vital.heart_rate:
                     features["thalach"] = float(latest_vital.heart_rate)
+                    vital_keys.add("thalach")
                 if latest_vital.temperature and latest_vital.temperature > 38:
                     features["exang"] = 1.0
+                    vital_keys.add("exang")
 
-            return heart_prediction_service.predict(features)
+            extracted_keys: set = set()
+            files = db.query(MedicalFile).filter(MedicalFile.patient_id == patient.id).all()
+            for f in files:
+                if not f.extracted_indicators:
+                    continue
+                for key, val in f.extracted_indicators.items():
+                    if val is None:
+                        continue
+                    try:
+                        features[key] = float(val)
+                        extracted_keys.add(key)
+                    except (ValueError, TypeError):
+                        pass
+
+            if session_indicators:
+                for key, val in session_indicators.items():
+                    if val is None:
+                        continue
+                    try:
+                        features[key] = float(val)
+                        extracted_keys.add(key)
+                    except (ValueError, TypeError):
+                        pass
+
+            extracted_keys -= vital_keys
+            for k in ("age", "sex"):
+                extracted_keys.discard(k)
+
+            return heart_prediction_service.predict(
+                features, extracted_keys=extracted_keys, vital_keys=vital_keys
+            )
         except Exception as e:
             logger.warning("ML prediction failed: %s", e)
             return None
@@ -165,18 +197,28 @@ class DiagnosisEngine:
     def _load_file_images(self, files: list[MedicalFile]) -> list[dict]:
         images = []
         for f in files:
-            if f.file_type != "image":
-                continue
-            data = storage_service.download_file(f.storage_key)
-            if data is None:
-                continue
-            prepared = file_processor.prepare_image_for_vision(data)
-            if prepared:
-                images.append({
-                    "data": file_processor.encode_image_for_vision(prepared),
-                    "mime_type": "image/png",
-                    "file_name": f.file_name,
-                })
+            if f.file_type == "image":
+                data = storage_service.download_file(f.storage_key)
+                if data is None:
+                    continue
+                prepared = file_processor.prepare_image_for_vision(data)
+                if prepared:
+                    images.append({
+                        "data": file_processor.encode_image_for_vision(prepared),
+                        "mime_type": "image/png",
+                        "file_name": f.file_name,
+                    })
+            elif f.file_type == "pdf":
+                data = storage_service.download_file(f.storage_key)
+                if data is None:
+                    continue
+                page_images = file_processor.pdf_to_images(data)
+                for idx, page_img in enumerate(page_images):
+                    images.append({
+                        "data": file_processor.encode_image_for_vision(page_img),
+                        "mime_type": "image/png",
+                        "file_name": f"{f.file_name} (page {idx + 1})",
+                    })
         return images
 
     def build_context_message(self, context: dict[str, Any]) -> str:

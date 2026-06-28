@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Text
+from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Text, JSON
 from sqlalchemy.orm import relationship
 
 from app.db.session import Base
@@ -18,6 +18,7 @@ class MedicalFile(Base):
     mime_type = Column(String(100))
     file_size = Column(Integer)
     extracted_text = Column(Text, nullable=True)
+    extracted_indicators = Column(JSON, nullable=True)
     uploaded_by = Column(Integer, ForeignKey("users.id"), nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
 

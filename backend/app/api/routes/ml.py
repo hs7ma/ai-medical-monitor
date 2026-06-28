@@ -2,7 +2,7 @@
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, List
 
 from app.db.session import get_db
 from app.api.deps import require_role
@@ -13,19 +13,21 @@ router = APIRouter(prefix="/api/ml", tags=["ml"])
 
 
 class HeartFeatures(BaseModel):
-    age: float
-    sex: float = 1
-    cp: float = 0
-    trestbps: float = 120
-    chol: float = 200
-    fbs: float = 0
-    restecg: float = 0
-    thalach: float = 150
-    exang: float = 0
-    oldpeak: float = 0
-    slope: float = 1
-    ca: float = 0
-    thal: float = 0
+    age: Optional[float] = None
+    sex: Optional[float] = None
+    cp: Optional[float] = None
+    trestbps: Optional[float] = None
+    chol: Optional[float] = None
+    fbs: Optional[float] = None
+    restecg: Optional[float] = None
+    thalach: Optional[float] = None
+    exang: Optional[float] = None
+    oldpeak: Optional[float] = None
+    slope: Optional[float] = None
+    ca: Optional[float] = None
+    thal: Optional[float] = None
+    extracted_keys: Optional[List[str]] = None
+    vital_keys: Optional[List[str]] = None
 
 
 @router.get("/status")
@@ -42,7 +44,12 @@ def predict_heart(
 ):
     if not heart_prediction_service.is_available():
         return {"available": False, "detail": "ML model not loaded"}
-    result = heart_prediction_service.predict(payload.model_dump())
+    data = payload.model_dump()
+    extracted_keys = set(data.pop("extracted_keys") or [])
+    vital_keys = set(data.pop("vital_keys") or [])
+    result = heart_prediction_service.predict(
+        data, extracted_keys=extracted_keys, vital_keys=vital_keys
+    )
     if result is None:
         return {"available": False, "detail": "Prediction failed"}
     return result

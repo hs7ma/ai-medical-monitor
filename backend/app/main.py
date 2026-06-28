@@ -29,6 +29,8 @@ async def lifespan(app: FastAPI):
     Base.metadata.create_all(bind=engine)
     logger.info("Database tables ensured")
 
+    _auto_migrate(engine)
+
     _seed_admin()
 
     if not settings.USE_SQLITE:
@@ -55,6 +57,28 @@ async def lifespan(app: FastAPI):
     except Exception:
         pass
     logger.info("Shutdown complete")
+
+
+def _auto_migrate(engine):
+    """Add new columns to existing tables that create_all cannot handle."""
+    from sqlalchemy import text, inspect
+
+    inspector = inspect(engine)
+    col_type = "JSON" if not settings.USE_SQLITE else "TEXT"
+
+    if "medical_files" in inspector.get_table_names():
+        existing_cols = {c["name"] for c in inspector.get_columns("medical_files")}
+        if "extracted_indicators" not in existing_cols:
+            with engine.begin() as conn:
+                conn.execute(text(f"ALTER TABLE medical_files ADD COLUMN extracted_indicators {col_type}"))
+            logger.info("Auto-migration: added extracted_indicators column to medical_files")
+
+    if "chat_sessions" in inspector.get_table_names():
+        existing_cols = {c["name"] for c in inspector.get_columns("chat_sessions")}
+        if "clinical_indicators" not in existing_cols:
+            with engine.begin() as conn:
+                conn.execute(text(f"ALTER TABLE chat_sessions ADD COLUMN clinical_indicators {col_type}"))
+            logger.info("Auto-migration: added clinical_indicators column to chat_sessions")
 
 
 def _seed_admin():
