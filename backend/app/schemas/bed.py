@@ -7,6 +7,11 @@ class BedAssign(BaseModel):
     patient_id: Optional[int] = None
 
 
+class BedCreate(BaseModel):
+    id: str
+    room: Optional[str] = None
+
+
 class BedOut(BaseModel):
     id: str
     room: Optional[str]

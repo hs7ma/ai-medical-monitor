@@ -11,7 +11,7 @@ from app.models.user import User, UserRole
 from app.models.bed import Bed
 from app.models.patient import Patient
 from app.models.vital_reading import VitalReading as VitalReadingModel
-from app.schemas.bed import BedOut, BedAssign, VitalReading, SensorVitalsCreate
+from app.schemas.bed import BedOut, BedAssign, BedCreate, VitalReading, SensorVitalsCreate
 from app.services.ws_hub import ws_hub
 
 logger = logging.getLogger(__name__)
@@ -25,6 +25,22 @@ def list_beds(
     user: User = Depends(require_role(UserRole.doctor, UserRole.nurse, UserRole.admin)),
 ):
     return db.query(Bed).all()
+
+
+@router.post("", response_model=BedOut, status_code=201)
+def create_bed(
+    payload: BedCreate,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_role(UserRole.admin)),
+):
+    existing = db.query(Bed).filter(Bed.id == payload.id).first()
+    if existing:
+        raise HTTPException(status_code=409, detail="Bed already exists")
+    bed = Bed(id=payload.id, room=payload.room, status="available")
+    db.add(bed)
+    db.commit()
+    db.refresh(bed)
+    return bed
 
 
 @router.get("/{bed_id}/vitals", response_model=List[VitalReading])
