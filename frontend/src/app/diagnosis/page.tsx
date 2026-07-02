@@ -923,7 +923,7 @@ ${mlContext}
   if (currentStep === 1) {
     return (
       <div className="flex h-[calc(100vh-6.5rem)] items-center justify-center p-6 bg-gradient-to-tr from-slate-50 to-white overflow-y-auto w-full animate-fade-in">
-        <div className="w-full max-w-[1400px] bg-white rounded-2xl border border-slate-200/80 shadow-md p-6 lg:p-8 flex flex-col h-full overflow-hidden">
+        <div className="w-full max-w-[1400px] bg-white rounded-2xl border border-slate-200/80 shadow-md p-6 lg:p-8 flex flex-col h-full overflow-auto">
           {/* Stepper progress */}
           <DiagnosisStepper step={1} hasDiagnosis={false} />
           
@@ -1071,7 +1071,7 @@ ${mlContext}
             </div>
 
             {/* Column 2: Radial Gauge & Results */}
-            <div className="border border-slate-200 rounded-xl p-4 flex flex-col justify-between bg-slate-50/10">
+            <div className="border border-slate-200 rounded-xl p-4 flex flex-col justify-between bg-slate-50/10 overflow-y-auto">
               <div className="space-y-4">
                 <h3 className="text-xs font-bold uppercase tracking-wider text-text-secondary pb-2 border-b border-slate-100 flex items-center gap-1.5">
                   <span>📊</span> {t("diagnosis.mlRiskResultTitle")}
@@ -1137,9 +1137,23 @@ ${mlContext}
                 )}
                 
                 {mlError && (
-                  <div className="rounded-xl bg-danger/10 border border-danger/20 px-3 py-2 text-[11px] text-danger flex items-center gap-2">
-                    <span>⚠️</span>
-                    <p className="font-semibold">{mlError}</p>
+                  <div className="rounded-xl bg-danger/10 border border-danger/20 px-3 py-2 text-[11px] text-danger space-y-2">
+                    <div className="flex items-center gap-2">
+                      <span>⚠️</span>
+                      <p className="font-semibold">{mlError}</p>
+                    </div>
+                    <button
+                      onClick={() => {
+                        setMlError("");
+                        handleMLPredict();
+                      }}
+                      disabled={mlLoading}
+                      className="w-full rounded-lg bg-accent hover:bg-accent-hover py-2 text-xs font-semibold text-white shadow-sm transition-all active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      {mlLoading
+                        ? (locale === "ar" ? "جاري التحليل..." : "Analyzing...")
+                        : (locale === "ar" ? "🔄 إعادة التشخيص" : "🔄 Re-diagnose")}
+                    </button>
                   </div>
                 )}
               </div>

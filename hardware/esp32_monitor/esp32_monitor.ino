@@ -38,8 +38,8 @@
 // ======================== Configuration ========================
 
 // WiFi
-const char* ssid     = "YOUR_WIFI_SSID";
-const char* password = "YOUR_WIFI_PASSWORD";
+const char* ssid     = "MSR3";
+const char* password = "60006000";
 
 // Backend API
 const char* backend_host = "ai-medical-monitor-production.up.railway.app";
